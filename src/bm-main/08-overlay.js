@@ -41,6 +41,8 @@ function buildHTML() {
     '<div id="_fireCfg"></div>' +
     '<div class="fc-row"><span class="fc-lbl">Strike Interval<span class="fc-tip" data-tip="串行模式（Strike / FIRE 串行）下每枪之间的间隔（毫秒）。BURST 按钮固定 200ms，不受此项影响。智谱后端使用 2 秒滑动窗口限流（阈值=1），低于 2 秒会触发大量 555。实测 2100ms 是单用户最优节奏。">?</span></span><input class="fc-num" id="_fireBurstInterval" type="number" min="500" max="10000" step="100" value="2100"></div>' +
     '<div class="fc-row"><span class="fc-lbl">Pay<span class="fc-tip" data-tip="create-sign 使用的支付方式，决定打开支付宝还是微信支付。推荐：ALI（Alipay）。">?</span></span><select class="fc-sel" id="_firePayType"><option value="ALI">Alipay</option><option value="WE_CHAT">WeChat</option></select></div>' +
+    '<div class="fc-row"><span class="fc-lbl">Max Shots<span class="fc-tip" data-tip="单次串行发射最大数量（串行和并发均生效）。0=不限制（发射所有票）。默认 11，超过可能触发账号拦截。">?</span></span><input class="fc-num" id="_fireMaxShots" type="number" min="0" max="999" step="1" value="11"></div>' +
+    '<div class="fc-row"><span class="fc-lbl">Auto Relogin<span class="fc-tip" data-tip="启用后，达到 Max Shots 时自动退出→重新登录→继续发射。适用于串行、并发和 10 点自动发射。">?</span></span><label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="_fireAutoRelogin" style="width:14px;height:14px;cursor:pointer"><span style="font-size:8px;color:#6366f1;font-weight:700" id="_fireAutoReloginLabel">OFF</span></label></div>' +
     '<button class="fb" id="_fb" disabled title="串行模式（Strike）：按上方 Burst Interval 顺序发射，遇到 555 自动退避，节奏稳。">&#9889; FIRE 串行 (0)</button>' +
     '<button class="fbb" id="_fbb" disabled title="并发模式（Burst）：固定 200ms 间隔快速齐射，忽略 555 退避，火力密度高，适合秒杀窗口内火力压制。">&#9889; BURST 并发 (0) · 200ms</button>' +
     '<div style="font-size:8px;color:#64748b;text-align:center;padding:3px 0" id="_ammo"></div>' +
@@ -96,17 +98,26 @@ function renderCaptchaMeter() {
 function applyFireConfigToControls(config) {
   var burstInterval = document.getElementById('_fireBurstInterval');
   var payType = document.getElementById('_firePayType');
+  var maxShots = document.getElementById('_fireMaxShots');
+  var autoRelogin = document.getElementById('_fireAutoRelogin');
+  var autoReloginLabel = document.getElementById('_fireAutoReloginLabel');
   if (burstInterval) burstInterval.value = String(Math.max(500, Math.min(10000, Math.round(Number(config.burstIntervalMs)) || 2100)));
   if (payType) payType.value = config.payType === 'WE_CHAT' ? 'WE_CHAT' : 'ALI';
+  if (maxShots) maxShots.value = String(Math.max(0, Math.round(Number(config.maxShots)) || 11));
+  if (autoRelogin) { autoRelogin.checked = !!config.autoRelogin; if (autoReloginLabel) autoReloginLabel.textContent = autoRelogin.checked ? 'ON' : 'OFF'; }
 }
 
 function readFireConfigFromControls() {
   var burstInterval = document.getElementById('_fireBurstInterval');
   var payType = document.getElementById('_firePayType');
+  var maxShots = document.getElementById('_fireMaxShots');
+  var autoRelogin = document.getElementById('_fireAutoRelogin');
   return {
-    ...(_fireConfig || { burstIntervalMs: 2100, payType: 'ALI' }),
+    ...(_fireConfig || { burstIntervalMs: 2100, payType: 'ALI', maxShots: 11, autoRelogin: false }),
     burstIntervalMs: Math.max(500, Math.min(10000, Math.round(Number(burstInterval ? burstInterval.value : 2100)) || 2100)),
     payType: payType && payType.value === 'WE_CHAT' ? 'WE_CHAT' : 'ALI',
+    maxShots: Math.max(0, Math.round(Number(maxShots ? maxShots.value : 11)) || 11),
+    autoRelogin: autoRelogin ? autoRelogin.checked : false,
   };
 }
 
@@ -117,11 +128,19 @@ function sendFireConfigUpdate() {
 }
 
 function bindFireControlEvents() {
-  var ids = ['_fireBurstInterval', '_firePayType'];
+  var ids = ['_fireBurstInterval', '_firePayType', '_fireMaxShots', '_fireAutoRelogin'];
   for (var i = 0; i < ids.length; i++) {
     var el = document.getElementById(ids[i]);
     if (!el) continue;
     el.addEventListener('change', sendFireConfigUpdate);
+  }
+  // Toggle ON/OFF label for checkbox
+  var ar = document.getElementById('_fireAutoRelogin');
+  if (ar) {
+    ar.addEventListener('change', function() {
+      var lbl = document.getElementById('_fireAutoReloginLabel');
+      if (lbl) lbl.textContent = ar.checked ? 'ON' : 'OFF';
+    });
   }
 }
 
@@ -217,6 +236,14 @@ function injectOverlay() {
     if (d.type === 'PREFIRE_STATUS') {
       renderPrefireAuthStatus(d.data);
     }
+
+    if (d.type === 'AUTO_RELOGIN_STATUS' && d.data) {
+      var autoEl = document.getElementById('_auto');
+      if (autoEl) {
+        autoEl.style.color = '#6366f1';
+        autoEl.textContent = 'Auto: relogin ' + (d.data.text || '') + (d.data.round ? ' [' + d.data.round + ']' : '');
+      }
+    }
   });
 
   document.getElementById('_ab').addEventListener('click', function() { toggleBatchMode(); });
@@ -289,18 +316,21 @@ function injectOverlay() {
     }
 
     if (!authReady && wasAuthReady) {
-      _productMatrix = { monthly: [], quarterly: [], yearly: [] };
-      _priorityList = [];
-      _ticketCount = 0;
-      _tickets = [];
-      try { sessionStorage.removeItem('bm_batch_preview'); } catch (e) {}
-      cmdToOverlay('CLEAR_TICKET_POOL');
-      renderProductsAuthError();
-      renderFireConfig();
-      renderCaptchaMeter();
-      syncSelectionStatus();
-      if (typeof _h1_rt !== 'undefined') _h1_rt.hasProducts = false;
-      if (typeof _h1_updateAuth === 'function') _h1_updateAuth();
+      // During auto-relogin, preserve the ticket pool and product state.
+      if (!_isAutoRelogin) {
+        _productMatrix = { monthly: [], quarterly: [], yearly: [] };
+        _priorityList = [];
+        _ticketCount = 0;
+        _tickets = [];
+        try { sessionStorage.removeItem('bm_batch_preview'); } catch (e) {}
+        cmdToOverlay('CLEAR_TICKET_POOL');
+        renderProductsAuthError();
+        renderFireConfig();
+        renderCaptchaMeter();
+        syncSelectionStatus();
+        if (typeof _h1_rt !== 'undefined') _h1_rt.hasProducts = false;
+        if (typeof _h1_updateAuth === 'function') _h1_updateAuth();
+      }
     }
     wasAuthReady = authReady;
 

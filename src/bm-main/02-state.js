@@ -128,4 +128,6 @@ var _priorityList = []; // ordered priority list of { productId }
 var _ticketCount = 0;
 var _tickets = []; // per-ticket lifecycle list from content script
 var _planOrder = ['Lite', 'Pro', 'Max'];
-var _fireConfig = { payType: 'ALI', burstIntervalMs: 2100 };
+var _fireConfig = { payType: 'ALI', burstIntervalMs: 2100, maxShots: 11, autoRelogin: false };
+var _isAutoRelogin = false;
+var _reloginRound = 0;

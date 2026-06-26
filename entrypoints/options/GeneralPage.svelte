@@ -42,6 +42,8 @@
   let captchaSaveMessage = $state('');
 
   let burstIntervalMs = $state(FIRE_CONFIG_DEFAULT.burstIntervalMs);
+  let maxShots = $state(FIRE_CONFIG_DEFAULT.maxShots);
+  let autoRelogin = $state(FIRE_CONFIG_DEFAULT.autoRelogin);
   let committedFireConfig = $state<FireConfig | null>(null);
   let fireSaving = $state(false);
   let fireSaveMessage = $state('');
@@ -79,6 +81,8 @@
       clickJitter = captcha.clickJitter;
       committedCaptcha = { ...captcha };
       burstIntervalMs = fire.burstIntervalMs;
+      maxShots = fire.maxShots;
+      autoRelogin = fire.autoRelogin;
       committedFireConfig = { ...fire };
       loaded = true;
     });
@@ -230,11 +234,13 @@
     return {
       ...(committedFireConfig ?? FIRE_CONFIG_DEFAULT),
       burstIntervalMs: Math.max(50, Math.round(Number(burstIntervalMs)) || FIRE_CONFIG_DEFAULT.burstIntervalMs),
+      maxShots: Math.max(0, Math.round(Number(maxShots)) || 0),
+      autoRelogin,
     };
   }
 
   function sameFireConfig(a: FireConfig | null, b: FireConfig): boolean {
-    return !!a && a.burstIntervalMs === b.burstIntervalMs;
+    return !!a && a.burstIntervalMs === b.burstIntervalMs && a.maxShots === b.maxShots && a.autoRelogin === b.autoRelogin;
   }
 
   function isFireDirty(): boolean {
@@ -249,7 +255,9 @@
       await fireStore.set(config);
       committedFireConfig = { ...config };
       burstIntervalMs = config.burstIntervalMs;
-      fireSaveMessage = `已生效：Burst ${config.burstIntervalMs}ms`;
+      maxShots = config.maxShots;
+      autoRelogin = config.autoRelogin;
+      fireSaveMessage = `已生效：Burst ${config.burstIntervalMs}ms · MaxShots=${config.maxShots} · Relogin=${config.autoRelogin ? 'ON' : 'OFF'}`;
     } finally {
       fireSaving = false;
     }
@@ -257,6 +265,8 @@
 
   async function handleFireReset() {
     burstIntervalMs = FIRE_CONFIG_DEFAULT.burstIntervalMs;
+    maxShots = FIRE_CONFIG_DEFAULT.maxShots;
+    autoRelogin = FIRE_CONFIG_DEFAULT.autoRelogin;
     await handleFireConfirm();
   }
 </script>
@@ -456,11 +466,21 @@
             <label class="form-label" for="fire-burst-interval">Burst 单发间隔（ms）</label>
             <input id="fire-burst-interval" type="number" class="form-select form-input-num" min="500" max="10000" step="100" bind:value={burstIntervalMs} />
           </div>
+          <div class="form-group">
+            <label class="form-label" for="fire-max-shots">单次最大发射数（0=不限制）</label>
+            <input id="fire-max-shots" type="number" class="form-select form-input-num" min="0" max="999" step="1" bind:value={maxShots} />
+          </div>
+          <div class="form-group" style="display:flex;flex-direction:row;align-items:center;gap:8px;padding-top:6px;">
+            <label class="toggle-row" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+              <input type="checkbox" bind:checked={autoRelogin} style="width:18px;height:18px;cursor:pointer;" />
+              <span class="form-label" style="margin:0;cursor:pointer;">自动重登（达到 Max Shots 后自动退出→登录→继续）</span>
+            </label>
+          </div>
           <div class="form-group" style="flex: 2;">
             <div class="next-sale-preview" style="margin-top: 0;">
               <span class="preview-label">当前配置</span>
               <span class="preview-value">
-                <span class="highlight-val">{burstIntervalMs}ms</span>
+                <span class="highlight-val">{burstIntervalMs}ms · {maxShots === 0 ? '无限制' : maxShots + ' 发'} · Relogin {autoRelogin ? 'ON' : 'OFF'}</span>
               </span>
               {#if isFireDirty()}
                 <span class="dirty-pill">待确认</span>

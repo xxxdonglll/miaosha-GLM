@@ -997,11 +997,27 @@ export default defineContentScript({
         return;
       }
 
+      let autoFireConfig: FireConfig;
+      try {
+        autoFireConfig = isExtensionContextValid() ? await fireStore.get() : { ...FIRE_CONFIG_DEFAULT };
+      } catch {
+        autoFireConfig = { ...FIRE_CONFIG_DEFAULT };
+      }
+
       const plan = buildAutoFirePlan({ tickets: valid, selectedIds, startMs });
-      const allShots = [...plan.initialShots, ...plan.followUpShots];
+      let allShots = [...plan.initialShots, ...plan.followUpShots];
       if (allShots.length === 0) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> Auto-fire plan empty' });
         return;
+      }
+
+      let wasMaxShotsCapped = false;
+      const autoMaxShots = autoFireConfig.maxShots ?? 0;
+      if (autoMaxShots > 0 && allShots.length > autoMaxShots) {
+        const originalLen = allShots.length;
+        allShots = allShots.slice(0, autoMaxShots);
+        wasMaxShotsCapped = true;
+        postToOverlay({ type: 'FIRE_RESULT', line: `> Auto MaxShots=${autoMaxShots} capped from ${originalLen} shots` });
       }
 
       const remainingPool = consumeReservedTickets(valid, plan.reservedTickets);
@@ -1052,8 +1068,51 @@ export default defineContentScript({
           cancelAll();
           postToOverlay({ type: 'FIRE_RESULT', line: '> Auto plan complete — ammo depleted (' + allShots.length + ' shots)' });
           postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total: allShots.length } });
+
+          if (autoFireConfig.autoRelogin && autoMaxShots > 0) {
+            _reloginCumulativeShots += allShots.length;
+            postToOverlay({ type: 'FIRE_RESULT', line: `> Cumulative shots: ${_reloginCumulativeShots}/${autoMaxShots}` });
+            if (_reloginCumulativeShots >= autoMaxShots) {
+              postToOverlay({ type: 'FIRE_RESULT', line: '> Auto-relogin: starting...' });
+              postToOverlay({ type: 'AUTO_RELOGIN_START' });
+            } else {
+              postToOverlay({ type: 'FIRE_RESULT', line: '> Tickets depleted, watching for new tickets...' });
+              startTicketWatch();
+            }
+          }
         }
       }, Math.max(0, lastScheduledAt - Date.now()) + 1000));
+    }
+
+    // ── Cumulative shot counter for auto-relogin across ticketWatch cycles ──
+    let _reloginCumulativeShots = 0;
+
+    // ── Ticket watch: poll for new tickets and auto-resume firing ──
+    let _ticketWatchTimer: ReturnType<typeof setInterval> | null = null;
+
+    function startTicketWatch() {
+      if (_ticketWatchTimer) return;
+      let waited = 0;
+      _ticketWatchTimer = setInterval(async () => {
+        waited += 2;
+        try {
+          const info = await getTicketInfo();
+          if (info.count > 0) {
+            clearInterval(_ticketWatchTimer!);
+            _ticketWatchTimer = null;
+            postToOverlay({ type: 'FIRE_RESULT', line: `> ${info.count} tickets arrived, resuming fire` });
+            prefireAndBurst(Date.now(), 'relogin-resume');
+            return;
+          }
+          if (waited >= 120) {
+            clearInterval(_ticketWatchTimer!);
+            _ticketWatchTimer = null;
+            postToOverlay({ type: 'FIRE_RESULT', line: '> Ticket watch timeout (120s) — stopped' });
+          }
+        } catch {
+          if (_ticketWatchTimer) { clearInterval(_ticketWatchTimer); _ticketWatchTimer = null; }
+        }
+      }, 2000);
     }
 
     // ── Unified strike sequence: shared by default strike and burst mode ──
@@ -1088,6 +1147,15 @@ export default defineContentScript({
       if (plan.shots.length === 0) {
         postToOverlay({ type: 'FIRE_RESULT', line: '> Strike queue empty' });
         return;
+      }
+
+      const maxShots = fireConfig.maxShots ?? 0;
+      let wasMaxShotsCapped = false;
+      if (maxShots > 0 && plan.shots.length > maxShots) {
+        const originalLen = plan.shots.length;
+        plan.shots = plan.shots.slice(0, maxShots);
+        wasMaxShotsCapped = true;
+        postToOverlay({ type: 'FIRE_RESULT', line: `> MaxShots=${maxShots} capped from ${originalLen} shots` });
       }
 
       // Consume all tickets used in this strike.
@@ -1265,6 +1333,19 @@ export default defineContentScript({
             cancelAll();
             postToOverlay({ type: 'FIRE_RESULT', line: `> ${options.label} complete — ammo depleted (${total} shots)` });
             postToOverlay({ type: 'BURST_FIRE_DEPLETED', data: { total } });
+
+            // Auto-relogin or ticket watch (cumulative across relogin-resume cycles)
+            if (fireConfig.autoRelogin && maxShots > 0) {
+              _reloginCumulativeShots += total;
+              postToOverlay({ type: 'FIRE_RESULT', line: `> Cumulative shots: ${_reloginCumulativeShots}/${maxShots}` });
+              if (_reloginCumulativeShots >= maxShots) {
+                postToOverlay({ type: 'FIRE_RESULT', line: '> Auto-relogin: starting...' });
+                postToOverlay({ type: 'AUTO_RELOGIN_START' });
+              } else {
+                postToOverlay({ type: 'FIRE_RESULT', line: '> Tickets depleted, watching for new tickets...' });
+                startTicketWatch();
+              }
+            }
           }
           return;
         }
@@ -1354,6 +1435,11 @@ export default defineContentScript({
       bannerWaveCount++;
       updateBannerWaveBadge();
 
+      // Reset cumulative count on fresh launches; keep it across relogin-resume cycles
+      if (reason !== 'relogin-resume') {
+        _reloginCumulativeShots = 0;
+      }
+
       if (reason === 'auto') {
         await runAutoFirePlan(startMs, authStatus.headers);
         return;
@@ -1361,6 +1447,12 @@ export default defineContentScript({
 
       if (reason === 'burst' || reason === 'batch-burst') {
         await burstStrike(startMs, authStatus.headers);
+        return;
+      }
+
+      if (reason === 'relogin-resume') {
+        postToOverlay({ type: 'FIRE_RESULT', line: '> Relogin resume strike' });
+        await strike(startMs, authStatus.headers);
         return;
       }
 
@@ -1381,6 +1473,33 @@ export default defineContentScript({
           const startMs: number = (event.data.data?.startMs) ?? Date.now();
           const reason: string = event.data.data?.reason ?? 'prefire-fire';
           prefireAndBurst(startMs, reason);
+        }
+        if (event.data.type === 'AUTO_RELOGIN_DONE') {
+          // Reset cumulative counter after successful relogin
+          _reloginCumulativeShots = 0;
+          // Wait for auth to settle, then resume firing
+          setTimeout(() => {
+            // Re-check ticket count
+            getTicketInfo().then((info) => {
+              if (info.count > 0) {
+                postToOverlay({ type: 'FIRE_RESULT', line: `> Auto-relogin done — resuming with ${info.count} tickets` });
+                prefireAndBurst(Date.now(), 'relogin-resume');
+              } else {
+                postToOverlay({ type: 'FIRE_RESULT', line: '> Auto-relogin done — no tickets available, waiting...' });
+                // Poll for tickets and fire when available
+                const ticketWatch = setInterval(async () => {
+                  const tickInfo = await getTicketInfo();
+                  if (tickInfo.count > 0) {
+                    clearInterval(ticketWatch);
+                    postToOverlay({ type: 'FIRE_RESULT', line: `> Tickets ready (${tickInfo.count}), resuming fire` });
+                    prefireAndBurst(Date.now(), 'relogin-resume');
+                  }
+                }, 2000);
+                // Safety timeout after 120s
+                setTimeout(() => clearInterval(ticketWatch), 120000);
+              }
+            });
+          }, 1500);
         }
         if (event.data.type === 'GET_SALE_TIME') {
           const cfg = await getSaleConfig();
@@ -1414,6 +1533,12 @@ export default defineContentScript({
             burstIntervalMs: Number.isFinite(Number(incoming.burstIntervalMs))
               ? Math.max(50, Math.round(Number(incoming.burstIntervalMs)))
               : current.burstIntervalMs,
+            maxShots: Number.isFinite(Number(incoming.maxShots))
+              ? Math.max(0, Math.round(Number(incoming.maxShots)))
+              : (current.maxShots ?? 11),
+            autoRelogin: typeof incoming.autoRelogin === 'boolean'
+              ? incoming.autoRelogin
+              : (current.autoRelogin ?? false),
           };
           try {
             if (isExtensionContextValid()) await fireStore.set(next);
