@@ -339,4 +339,4 @@ async def solve(req: SolveRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=9876, log_level="info")
+    uvicorn.run("server:app", host="127.0.0.1", port=9876, log_level="info", workers=4)
