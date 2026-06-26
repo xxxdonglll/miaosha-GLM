@@ -166,6 +166,15 @@ function injectOverlay() {
       if (limit > 0 && isFinite(limit)) {
         BATCH_SESSION_LIMIT = Math.round(limit);
       }
+      if (typeof d.data.autoSolve === 'boolean') {
+        AUTO_SOLVE = d.data.autoSolve;
+      }
+      if (typeof d.data.ocrServiceUrl === 'string' && d.data.ocrServiceUrl.length > 0) {
+        OCR_SERVICE_URL = d.data.ocrServiceUrl;
+      }
+      if (typeof d.data.confidenceThreshold === 'number') CONFIDENCE_THRESHOLD = d.data.confidenceThreshold;
+      if (typeof d.data.clickInterval === 'number' && d.data.clickInterval > 0) CLICK_INTERVAL = d.data.clickInterval;
+      if (typeof d.data.clickJitter === 'number') CLICK_JITTER = d.data.clickJitter;
       renderCaptchaMeter();
     }
 

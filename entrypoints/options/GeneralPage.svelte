@@ -32,6 +32,11 @@
   let saleSaveMessage = $state('');
 
   let batchSessionLimit = $state(CAPTCHA_CONFIG_DEFAULT.batchSessionLimit);
+  let autoSolve = $state(CAPTCHA_CONFIG_DEFAULT.autoSolve);
+  let ocrServiceUrl = $state(CAPTCHA_CONFIG_DEFAULT.ocrServiceUrl);
+  let confidenceThreshold = $state(CAPTCHA_CONFIG_DEFAULT.confidenceThreshold);
+  let clickInterval = $state(CAPTCHA_CONFIG_DEFAULT.clickInterval);
+  let clickJitter = $state(CAPTCHA_CONFIG_DEFAULT.clickJitter);
   let committedCaptcha = $state<CaptchaConfig | null>(null);
   let captchaSaving = $state(false);
   let captchaSaveMessage = $state('');
@@ -67,6 +72,11 @@
       committedSale = { ...s };
       alarmStatus = status;
       batchSessionLimit = captcha.batchSessionLimit;
+      autoSolve = captcha.autoSolve;
+      ocrServiceUrl = captcha.ocrServiceUrl;
+      confidenceThreshold = captcha.confidenceThreshold;
+      clickInterval = captcha.clickInterval;
+      clickJitter = captcha.clickJitter;
       committedCaptcha = { ...captcha };
       burstIntervalMs = fire.burstIntervalMs;
       committedFireConfig = { ...fire };
@@ -172,19 +182,35 @@
   }
 
   function isCaptchaDirty(): boolean {
-    return batchSessionLimit !== (committedCaptcha?.batchSessionLimit ?? CAPTCHA_CONFIG_DEFAULT.batchSessionLimit);
+    const base = committedCaptcha ?? CAPTCHA_CONFIG_DEFAULT;
+    return batchSessionLimit !== base.batchSessionLimit
+      || autoSolve !== base.autoSolve
+      || ocrServiceUrl !== base.ocrServiceUrl
+      || confidenceThreshold !== base.confidenceThreshold
+      || clickInterval !== base.clickInterval
+      || clickJitter !== base.clickJitter;
   }
 
   async function handleCaptchaConfirm() {
     const clamped = Math.max(1, Math.min(1000, Number(batchSessionLimit) || CAPTCHA_CONFIG_DEFAULT.batchSessionLimit));
     batchSessionLimit = clamped;
-    const config: CaptchaConfig = { batchSessionLimit: clamped };
+    const config: CaptchaConfig = {
+      batchSessionLimit: clamped,
+      autoSolve,
+      ocrServiceUrl: ocrServiceUrl.trim() || CAPTCHA_CONFIG_DEFAULT.ocrServiceUrl,
+      confidenceThreshold,
+      clickInterval,
+      clickJitter,
+    };
+    ocrServiceUrl = config.ocrServiceUrl;
     captchaSaving = true;
     captchaSaveMessage = '';
     try {
       await captchaStore.set(config);
       committedCaptcha = { ...config };
-      captchaSaveMessage = `已生效：每轮录入 ${clamped} 个验证码`;
+      captchaSaveMessage = autoSolve
+        ? `已生效：自动识别已开启（${config.ocrServiceUrl}）`
+        : `已生效：每轮录入 ${clamped} 个验证码`;
     } finally {
       captchaSaving = false;
     }
@@ -192,6 +218,11 @@
 
   async function handleCaptchaReset() {
     batchSessionLimit = CAPTCHA_CONFIG_DEFAULT.batchSessionLimit;
+    autoSolve = CAPTCHA_CONFIG_DEFAULT.autoSolve;
+    ocrServiceUrl = CAPTCHA_CONFIG_DEFAULT.ocrServiceUrl;
+    confidenceThreshold = CAPTCHA_CONFIG_DEFAULT.confidenceThreshold;
+    clickInterval = CAPTCHA_CONFIG_DEFAULT.clickInterval;
+    clickJitter = CAPTCHA_CONFIG_DEFAULT.clickJitter;
     await handleCaptchaConfirm();
   }
 
@@ -346,6 +377,51 @@
             </div>
           </div>
         </div>
+
+        <div class="form-row" style="margin-top: 12px;">
+          <label class="toggle-row" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" bind:checked={autoSolve} style="width:18px;height:18px;cursor:pointer;" />
+            <span class="form-label" style="margin:0;cursor:pointer;">自动识别验证码（需运行本地 OCR 服务）</span>
+          </label>
+        </div>
+
+        {#if autoSolve}
+          <div class="form-row" style="margin-top: 8px;">
+            <div class="form-group" style="flex:1;">
+              <label class="form-label" for="ocr-url">OCR 服务地址</label>
+              <input id="ocr-url" type="text" class="form-select" bind:value={ocrServiceUrl} placeholder="http://127.0.0.1:9876" />
+            </div>
+          </div>
+        {/if}
+
+        {#if autoSolve}
+          <details class="tuning-details" style="margin-top: 12px;">
+            <summary class="tuning-summary">&#9881; OCR 调优参数</summary>
+            <div class="tuning-grid">
+              <div class="tuning-item">
+                <label class="form-label" for="conf-threshold">匹配置信度阈值 (confidence_threshold)</label>
+                <div class="tuning-slider-row">
+                  <input id="conf-threshold" type="range" min="0.01" max="0.5" step="0.01" bind:value={confidenceThreshold} />
+                  <span class="tuning-val">{confidenceThreshold.toFixed(2)}</span>
+                </div>
+              </div>
+              <div class="tuning-item">
+                <label class="form-label" for="click-interval">点击间隔 ms (click_interval)</label>
+                <div class="tuning-slider-row">
+                  <input id="click-interval" type="range" min="100" max="500" step="10" bind:value={clickInterval} />
+                  <span class="tuning-val">{clickInterval}ms</span>
+                </div>
+              </div>
+              <div class="tuning-item">
+                <label class="form-label" for="click-jitter">随机偏移 px (±click_jitter)</label>
+                <div class="tuning-slider-row">
+                  <input id="click-jitter" type="range" min="0" max="10" step="1" bind:value={clickJitter} />
+                  <span class="tuning-val">±{clickJitter}px</span>
+                </div>
+              </div>
+            </div>
+          </details>
+        {/if}
 
         <div class="sale-time-actions">
           {#if captchaSaveMessage}
@@ -511,4 +587,14 @@
   @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
   @media (max-width: 960px) { .form-row, .sale-time-actions { flex-wrap: wrap; } }
+
+  .tuning-details { border: 1px solid var(--panel-border-soft); border-radius: 12px; padding: 12px 16px; background: rgba(30,41,59,0.04); }
+  @media (prefers-color-scheme: dark) { .tuning-details { background: rgba(15,23,42,0.24); } }
+  .tuning-summary { font-size: 12px; font-weight: 700; color: var(--text-muted); cursor: pointer; user-select: none; }
+  .tuning-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  @media (max-width: 640px) { .tuning-grid { grid-template-columns: 1fr; } }
+  .tuning-item { display: flex; flex-direction: column; gap: 4px; }
+  .tuning-slider-row { display: flex; align-items: center; gap: 8px; }
+  .tuning-slider-row input[type="range"] { flex: 1; accent-color: var(--violet); }
+  .tuning-val { font-size: 12px; font-weight: 700; color: var(--violet); min-width: 48px; text-align: right; font-family: 'SF Mono', Monaco, Consolas, monospace; }
 </style>

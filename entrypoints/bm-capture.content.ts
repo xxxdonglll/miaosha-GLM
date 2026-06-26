@@ -269,7 +269,17 @@ async function syncCaptchaConfig(pushToOverlay = false) {
     if (limit > 0 && isFinite(limit)) {
       TICKET_POOL_MAX = Math.max(1, Math.round(limit));
       if (pushToOverlay) {
-        postToOverlay({ type: 'CAPTCHA_CONFIG', data: { batchSessionLimit: TICKET_POOL_MAX } });
+        postToOverlay({
+          type: 'CAPTCHA_CONFIG',
+          data: {
+            batchSessionLimit: TICKET_POOL_MAX,
+            autoSolve: cfg.autoSolve,
+            ocrServiceUrl: cfg.ocrServiceUrl,
+            confidenceThreshold: cfg.confidenceThreshold,
+            clickInterval: cfg.clickInterval,
+            clickJitter: cfg.clickJitter,
+          },
+        });
       }
     }
   } catch {

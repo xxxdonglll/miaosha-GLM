@@ -4,6 +4,14 @@ var _batchMode = false; // batch continuous captcha solving
 var _batchCount = 0; // captchas solved in current batch session
 var _activeCaptcha = null; // reference to the currently open TencentCaptcha instance (for force-destroy on ESC)
 var BATCH_SESSION_LIMIT = 100; // auto-stop after this many per session (default 100, updatable via CAPTCHA_CONFIG)
+var AUTO_SOLVE = false; // auto-solve captcha via local OCR service
+var OCR_SERVICE_URL = 'http://127.0.0.1:9876'; // local OCR service URL
+
+// OCR tuning params (updatable via CAPTCHA_CONFIG)
+var CONFIDENCE_THRESHOLD = 0.1;
+var CLICK_INTERVAL = 200;
+var CLICK_JITTER = 3;
+var _solveInFlight = false; // prevents duplicate OCR /solve requests
 var _authFailed = false; // true when batch-preview API returns code=1001 (not logged in)
 
 // ── Page-level ticket store (sessionStorage) ──

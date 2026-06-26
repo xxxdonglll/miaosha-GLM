@@ -22,7 +22,116 @@ function produceCaptcha() {
     }, { mode: 'popup' });
     _activeCaptcha = c;
     c.show();
+    // Auto-solve captcha if OCR service is enabled
+    if (AUTO_SOLVE) {
+      setTimeout(autoSolveCaptcha, 600);
+    }
   } catch(e) { postMsg('CAPTCHA_ERROR', { msg: e.message }); }
+}
+
+// ── OCR auto-solve ──
+var _solvingGen = 0;
+
+function autoSolveCaptcha() {
+  if (_solveInFlight) return;
+  var gen = ++_solvingGen;
+  var bgEl = document.querySelector('.tencent-captcha-dy__verify-bg-img');
+  var headerEl = document.querySelector('.tencent-captcha-dy__header-text');
+  if (!bgEl || !headerEl) {
+    if (_activeCaptcha) setTimeout(autoSolveCaptcha, 200);
+    return;
+  }
+
+  var headerText = headerEl.textContent || '';
+  var chars = headerText.replace('请依次点击：', '').trim().split(/\s+/).filter(Boolean);
+  if (chars.length !== 3) {
+    if (_activeCaptcha) setTimeout(autoSolveCaptcha, 200);
+    return;
+  }
+
+  var bg = bgEl.style.backgroundImage;
+  var imageUrl = bg.replace(/^url\(["']?/, '').replace(/["']?\)$/, '');
+  if (!imageUrl) {
+    if (_activeCaptcha) setTimeout(autoSolveCaptcha, 200);
+    return;
+  }
+
+  _solveInFlight = true;
+
+  fetch(OCR_SERVICE_URL + '/solve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      image_url: imageUrl,
+      chars: chars,
+      confidence_threshold: CONFIDENCE_THRESHOLD,
+    }),
+  })
+  .then(function(r) {
+    if (!r.ok) throw new Error('OCR service returned ' + r.status);
+    return r.json();
+  })
+  .then(function(data) {
+    if (gen !== _solvingGen) return;
+    if (!data.positions || data.positions.length !== 3) throw new Error('Invalid OCR response');
+
+    var displayW = bgEl.offsetWidth;
+    var displayH = bgEl.offsetHeight;
+    var scaleX = displayW / data.image_width;
+    var scaleY = displayH / data.image_height;
+
+    var totalDelay = 0;
+    data.positions.forEach(function(p, i) {
+      var delay = CLICK_INTERVAL;
+      totalDelay += delay;
+      var d = totalDelay;
+      setTimeout(function() {
+        if (gen !== _solvingGen) return;
+        var offsetX = (Math.random() - 0.5) * CLICK_JITTER * 2;
+        var offsetY = (Math.random() - 0.5) * CLICK_JITTER * 2;
+        clickCaptchaChar(bgEl, p.x * scaleX + offsetX, p.y * scaleY + offsetY);
+      }, d);
+    });
+
+    setTimeout(function() {
+      if (gen !== _solvingGen) return;
+      var confirmBtn = document.querySelector('.tencent-captcha-dy__verify-confirm-btn');
+      if (confirmBtn && !confirmBtn.classList.contains('tencent-captcha-dy__verify-confirm-btn--disabled')) {
+        confirmBtn.click();
+      }
+    }, totalDelay + 300);
+
+    setTimeout(function() {
+      if (gen !== _solvingGen) return;
+      var stillOpen = document.querySelector('.tencent-captcha-dy__verify-bg-img');
+      if (stillOpen && _activeCaptcha) {
+        var refreshBtn = document.querySelector('.tencent-captcha-dy__footer-icon--refresh');
+        if (refreshBtn) refreshBtn.click();
+        setTimeout(autoSolveCaptcha, 500);
+      }
+    }, totalDelay + 1300);
+
+    _solveInFlight = false;
+  })
+  .catch(function(err) {
+    _solveInFlight = false;
+    if (_activeCaptcha) {
+      var refreshBtn = document.querySelector('.tencent-captcha-dy__footer-icon--refresh');
+      if (refreshBtn) refreshBtn.click();
+      setTimeout(autoSolveCaptcha, 500);
+    }
+  });
+}
+
+function clickCaptchaChar(bgEl, x, y) {
+  var rect = bgEl.getBoundingClientRect();
+  bgEl.dispatchEvent(new MouseEvent('click', {
+    clientX: rect.left + x,
+    clientY: rect.top + y,
+    bubbles: true,
+    cancelable: true,
+    view: window,
+  }));
 }
 
 // Force-destroy the currently active captcha modal (for ESC / force-stop)
