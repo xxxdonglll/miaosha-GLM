@@ -17,7 +17,7 @@ Write-Host " $pyVer" -ForegroundColor Green
 
 Write-Host "[2/4] Checking packages..." -NoNewline
 $needInstall = $false
-if (!(Test-Path "$shortPkg\ddddocr")) { $needInstall = $true }
+if (!(Test-Path "$shortPkg\httpx")) { $needInstall = $true }
 
 if ($needInstall) {
     Write-Host " installing..." -ForegroundColor Yellow
@@ -25,7 +25,7 @@ if ($needInstall) {
 
     New-Item -Path $shortPkg -ItemType Directory -Force | Out-Null
 
-    pip install --target "$shortPkg" ddddocr aiohttp --no-warn-script-location 2>&1
+    pip install --target "$shortPkg" -r requirements.txt --no-warn-script-location 2>&1
 
     if ($LASTEXITCODE -ne 0) {
         Write-Host "FAILED" -ForegroundColor Red
