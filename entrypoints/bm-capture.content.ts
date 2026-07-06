@@ -1020,7 +1020,16 @@ export default defineContentScript({
         postToOverlay({ type: 'FIRE_RESULT', line: `> Auto MaxShots=${autoMaxShots} capped from ${originalLen} shots` });
       }
 
-      const remainingPool = consumeReservedTickets(valid, plan.reservedTickets);
+      // Reschedule all capped shots to serial burst at Strike Interval
+      const burstIntervalMs = Math.max(50, Math.round(autoFireConfig.burstIntervalMs) || 2100);
+      allShots = allShots.map((shot, idx) => ({
+        ...shot,
+        scheduledAt: startMs + idx * burstIntervalMs,
+      }));
+
+      // Consume only the actually-fired shots' tickets from the pool
+      const usedTickets = allShots.map(s => ({ ticket: s.ticket, createdAt: s.createdAt }));
+      const remainingPool = consumeReservedTickets(valid, usedTickets);
       _ticketPool = remainingPool;
       writePageTicketStore();
       const remainingInfo = await getTicketInfo();
@@ -1035,7 +1044,7 @@ export default defineContentScript({
 
       postToOverlay({
         type: 'FIRE_RESULT',
-        line: '> Auto plan: initial ' + plan.initialShots.length + ' concurrent + follow-up ' + plan.followUpShots.length + ' randomized expiry-safe shots',
+        line: '> Auto plan: ' + allShots.length + ' shots serial · ' + burstIntervalMs + 'ms burst interval',
       });
 
       postToOverlay({
@@ -1054,7 +1063,7 @@ export default defineContentScript({
           initialCount: plan.initialShots.length,
           followUpCount: plan.followUpShots.length,
           mode: 'auto',
-          burstIntervalMs: 0,
+          burstIntervalMs: burstIntervalMs,
         },
       });
 
